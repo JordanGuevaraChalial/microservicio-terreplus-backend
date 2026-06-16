@@ -1,0 +1,63 @@
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from enum import Enum
+import joblib
+import pandas as pd
+import os
+import warnings
+warnings.filterwarnings("ignore")
+
+app = FastAPI(title="TerrePlus Valuation Service", version="1.0.0")
+
+class TipoSuelo(str, Enum):
+    fertil = "fertil"
+    medio = "medio"
+    pobre = "pobre"
+
+class TerrenoInput(BaseModel):
+    area_hectareas: float
+    tipo_suelo: TipoSuelo
+    acceso_riego: int
+    proximidad_vias_km: float
+
+model_path = os.path.join(os.path.dirname(__file__), 'modelo_valoracion.pkl')
+model = joblib.load(model_path)
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "ms-valuation"}
+
+@app.post("/api/v1/valuate")
+async def valuate(terreno: TerrenoInput):
+    try:
+        prepared_data = {
+            'area_hectareas': terreno.area_hectareas,
+            'acceso_riego': terreno.acceso_riego,
+            'proximidad_vias_km': terreno.proximidad_vias_km,
+            'tipo_suelo_fertil': 1 if terreno.tipo_suelo == "fertil" else 0,
+            'tipo_suelo_medio': 1 if terreno.tipo_suelo == "medio" else 0,
+            'tipo_suelo_pobre': 1 if terreno.tipo_suelo == "pobre" else 0
+        }
+        
+        df = pd.DataFrame([prepared_data])
+        prediccion = model.predict(df)[0]
+        valor = round(float(prediccion), 2)
+        
+        if valor > 8000:
+            recomendacion = "Alta rentabilidad - Cultivo intensivo recomendado"
+        elif valor > 5000:
+            recomendacion = "Rentabilidad media - Cultivo de ciclo corto o ganadería"
+        else:
+            recomendacion = "Baja rentabilidad - Revisar accesibilidad o conservación"
+        
+        return {
+            "status": "success",
+            "data": {
+                "valor_por_hectarea": valor,
+                "valor_total": round(valor * terreno.area_hectareas, 2),
+                "recomendacion": recomendacion,
+                "precision": 0.94
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
